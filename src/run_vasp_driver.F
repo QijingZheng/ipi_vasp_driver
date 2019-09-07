@@ -3751,7 +3751,7 @@ nblock: IF (MOD(NSTEP,DYN%NBLOCK)==0) THEN
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! energy without entropy (sigma -> 0), eV to a.u.
-        epot = TOTEN - EENTROPY / (2 + NORDER) / (2*RYTOEV)
+        epot = (TOTEN - EENTROPY / (2 + NORDER)) / (2*RYTOEV)
         ! The forces on atoms, eV / Angstrom to a.u.
         combuf = RESHAPE(TIFOR, (/3 * nat/)) / (2*RYTOEV) * AUTOA
         ! The pressure virial, eV to Hartree
