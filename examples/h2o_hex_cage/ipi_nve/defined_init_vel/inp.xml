@@ -1,0 +1,43 @@
+<simulation mode='static' verbosity='high'>
+  <output prefix='nve'>
+    <properties filename='prp' stride='1' >
+      [
+      step, time{femtosecond}, temperature{kelvin},
+      potential{electronvolt}, kinetic_md{electronvolt}
+      ]
+    </properties>
+    <trajectory filename='pos' stride='1' cell_units='angstrom'>
+      positions{angstrom}
+    </trajectory>
+    <trajectory filename='vel' stride='1' cell_units='angstrom'>
+      velocities
+    </trajectory>
+  </output>
+  <total_steps> 500 </total_steps>
+  <prng>
+    <seed> 27182 </seed>
+  </prng>
+  <ffsocket name='ipi_vasp' mode='inet'>
+    <address> 19.19.19.100 </address>
+    <port> 31416 </port>
+  </ffsocket>
+  <system>
+    <initialize nbeads='1'>
+      <file mode='xyz' units='angstrom'> init_pos.xyz </file>
+      <cell mode='abc' units='angstrom'> [20.0, 20.0, 20.0] </cell>
+      <velocities mode='xyz' units='atomic_unit'> init_vel.xyz </velocities>
+      <!-- <velocities mode='thermal' units='kelvin'> 300 </velocities> -->
+    </initialize>
+    <forces>
+      <force forcefield='ipi_vasp'/>
+    </forces>
+    <motion mode='dynamics'>
+      <!-- For an NVE simulation, must set fixcom = False to get the correct -->
+      <!-- temperature! -->
+      <fixcom> False </fixcom>
+      <dynamics mode='nve'>
+        <timestep units='femtosecond'> 0.5 </timestep>
+      </dynamics>
+    </motion>
+  </system>
+</simulation>

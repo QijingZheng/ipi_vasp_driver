@@ -1,0 +1,33 @@
+General
+  SYSTEM = VaspCalc
+    PREC = Med
+#    ENCUT = 400 eV
+   ISPIN = 1
+  ISTART = 1
+#   ICHARG = 1
+
+Electronic relaxation
+    NPAR = 4
+#    IALGO = 38
+    ALGO = Fast
+  NELMIN = 4
+    NELM = 400
+   EDIFF = 1E-6
+  ISMEAR = 0
+   SIGMA = 0.1
+  LORBIT = 11
+
+Writing Flag
+  NWRITE = 1
+   LWAVE = .FALSE.
+  LCHARG = .FALSE.
+
+Molecular Dynamics
+    ISYM = 0
+  IBRION = 0
+     NSW = 500
+    ISIF = 2
+  EDIFFG = -1E-2
+   POTIM = 0.5
+   SMASS = -3
+  NBLOCK = 1

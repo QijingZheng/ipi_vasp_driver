@@ -1,0 +1,101 @@
+
+ ____       ____       ____       ____
+/    \     /    \     /    \     /    \ 
+|  #################################  |
+\__#_/     \____/     \____/     \_#__/
+   #    _        _______  _____    #
+   #   (_)      |_   __ \|_   _|   #      -*-     v 2.0    -*-
+   #   __  ______ | |__) | | |     #
+   Y  [  ||______||  ___/  | |     #      A Universal Force Engine
+  0 0  | |       _| |_    _| |_    #      
+   #  [___]     |_____|  |_____|   #
+ __#_       ____       ____       _#__
+/  # \     /    \     /    \     / #  \ 
+|  #################################  |
+\____/     \____/     \____/     \____/
+
+    
+fetching ffsocket
+ # Initializing system object 
+ # Initializing simulation object 
+ # Initializer (stage 1) parsing positions object.
+Initializing from file init.xyz. Dimension: length, units: angstrom, cell_units: automatic
+Interpreting input with dimension length, units angstrom and cell units atomic_unit
+ # Initializer (stage 1) parsing masses object.
+Initializing from file init.xyz. Dimension: length, units: automatic, cell_units: automatic
+Interpreting input with dimension length, units atomic_unit and cell units atomic_unit
+ # Initializer (stage 1) parsing labels object.
+Initializing from file init.xyz. Dimension: length, units: automatic, cell_units: automatic
+Interpreting input with dimension length, units atomic_unit and cell units atomic_unit
+ # Initializer (stage 1) parsing cell object.
+Initializing from file init.xyz. Dimension: length, units: automatic, cell_units: automatic
+Interpreting input with dimension length, units atomic_unit and cell units atomic_unit
+ # Initializer (stage 1) parsing cell object.
+ !W! Momenta not specified in initialize. Will start with zero velocity if they are not specified in beads.
+NOW BINDING THE FORCES.... 
+ # Initializer (stage 2) parsing positions object.
+ # Initializer (stage 2) parsing masses object.
+ # Initializer (stage 2) parsing labels object.
+ # Initializer (stage 2) parsing cell object.
+ # Initializer (stage 2) parsing cell object.
+Created inet socket with address 19.19.19.100 and port number 31416
+ @ForceField: Starting the polling thread main loop.
+ # i-PI loaded input file:  inp.xml
+ --- begin input file content ---
+<simulation mode='static' verbosity='high'>
+  <output prefix='h2o_hex_cage_geop'>
+    <properties filename='prp' stride='1' >
+      [step, potential{electronvolt}]
+    </properties>
+    <trajectory filename='trj' stride='1'>
+      positions{angstrom}
+    </trajectory>
+  </output>
+  <total_steps> 400 </total_steps>
+  <prng>
+    <seed> 27182 </seed>
+  </prng>
+  <ffsocket name='ipi_vasp' mode='inet'>
+    <address> 19.19.19.100 </address>
+    <port> 31416 </port>
+  </ffsocket>
+  <system>
+    <initialize nbeads='1'>
+      <file mode='xyz' units='angstrom'> init.xyz </file>
+      <cell mode='abc' units='angstrom'> [20.0, 20.0, 20.0] </cell>
+    </initialize>
+    <forces>
+      <force forcefield='ipi_vasp'/>
+    </forces>
+    <motion mode='minimize'>
+      <optimizer mode='cg'>
+        <tolerances> 
+          <force> 2E-4 </force>
+        </tolerances>
+      </optimizer>
+    </motion>
+  </system>
+</simulation>
+ ---  end input file content  ---
+ @SOCKET:   Client asked for connection from ('19.19.19.23', 51910). Now hand-shaking.
+ @SOCKET:   Handshaking was successful. Added to the client list.
+ @SOCKET: 19/09/04-19:20:46 Assigning [ none] request id    0 to client with last-id None (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:07 Assigning [ free] request id    1 to client with last-id    0 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:11 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:16 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:28 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:42 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:21:58 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:22:16 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:22:34 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:22:47 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:23:00 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:23:12 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ @SOCKET: 19/09/04-19:23:22 Assigning [match] request id    1 to client with last-id    1 (  0/  1 : ('19.19.19.23', 51910))
+ !W!  @SOCKET:   Inconsistent client state in dispatch thread! (III)
+ !W!  @SOCKET:   Client ('19.19.19.23', 51910) died or got unresponsive(C). Removing from the list.
+ !W!  @SOFTEXIT:   Kill signal. Trying to make a clean exit.
+SOFTEXIT CALLED FROM THREAD <_MainThread(MainThread, started 140138083342144)>  @SOFTEXIT: Kill signal received
+ !W! Soft exit has been requested with message: ' @SOFTEXIT: Kill signal received'. Cleaning up.
+SOFTEXIT CALLED FROM THREAD <Thread(Thread-1, started daemon 140137098901248)>  @ FORCES : cannot return so will die off here
+ @SOCKET: Shutting down the driver interface.
