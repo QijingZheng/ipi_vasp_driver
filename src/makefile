@@ -140,13 +140,13 @@ F90SRC+=main.f90
 
 all: libs sources
 	rm -f vasp ; $(MAKE) vasp ; cp vasp $(BINDIR)/$(EXE)
-	rm -f vasp ; $(MAKE) vasp_dri ; cp vasp $(BINDIR)/$(EXE)_dri
+	rm -f vasp_dri ; $(MAKE) vasp_dri ; cp vasp_dri $(BINDIR)/$(EXE)_dri
 	
 vasp: $(OBJS) $(FFT3D) $(INC) main.o
 	$(FCL) -o vasp $(OBJS) main.o $(FFT3D) $(LLIB) $(LINK)
 
 vasp_dri: $(OBJS) $(FFT3D) $(INC) sockets.o fsockets.o run_vasp_driver.o 
-	$(FCL) -o vasp $(OBJS) sockets.o fsockets.o run_vasp_driver.o $(FFT3D) $(LLIB) $(LINK)
+	$(FCL) -o vasp_dri $(OBJS) sockets.o fsockets.o run_vasp_driver.o $(FFT3D) $(LLIB) $(LINK)
 
 sources:
 	rsync -u $(SRCDIR)/*.F $(SRCDIR)/*.inc .
