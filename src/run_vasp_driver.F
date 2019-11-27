@@ -643,6 +643,47 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
   SEED_INIT = SEED
 #endif
 
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! Reading command line arguments for i-pi
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  IF (DYN%IBRION == 57) THEN
+    io_begin
+      hostname = '127.0.0.1'
+      port     = 27182       ! default port number
+      inet     = 1           ! default internet socket
+      ii       = 1           ! command line argument counter
+      do
+        call get_command_argument(ii, rbuff)
+        if(len_trim(rbuff) == 0) exit
+        ii = ii + 1
+        select case (trim(rbuff))
+          case('-h')
+            call get_command_argument(ii, hostname)
+          case('-p')
+            call get_command_argument(ii, pbuff)
+            read(pbuff,*) port
+          case('-i')
+            inet=1    ! internet socket
+          case('-u')
+            inet=0    ! UNIX socket
+        end select
+      end do
+    io_end
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! Connect to the i-pi server
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !
+    do_io CALL open_socket ( ipi_socket, inet, port, hostname )
+    CALLMPI( M_bcast_i(COMM_WORLD, ipi_socket, 1) )
+    do_io write(*,'(X,A,A,I6)') " @ DRIVER MODE: Connecting to server: ", &
+                                trim( hostname ) // " :", port
+  END IF
+  !
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
   KPOINTS%NKPX = MAX(1, CEILING(LATT_CUR%BNORM(1)*PI*2/KPOINTS%SPACING))
   KPOINTS%NKPY = MAX(1, CEILING(LATT_CUR%BNORM(2)*PI*2/KPOINTS%SPACING))
   KPOINTS%NKPZ = MAX(1, CEILING(LATT_CUR%BNORM(3)*PI*2/KPOINTS%SPACING))
@@ -801,6 +842,77 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
   CALL RD_POSCAR(LATT_CUR, T_INFO, DYN, &
  &           NIOND, NIONPD, NTYPD, NTYPPD, &
  &           IO%IU0, IO%IU6)
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! We have read the positions from POSCAR, however, this might differ from
+  ! the positions read from i-pi server. Therefore, we write a driver loop
+  ! to get the positions.
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  IF (DYN%IBRION == 57) THEN
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    DRIVER_LOOP_1: DO
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !
+    do_io CALL readbuffer(ipi_socket, HEADER, MSGLEN)
+    do_io write(*,*) " @ DRIVER MODE: Message from server: ", trim( HEADER )
+    CALLMPI( M_bcast_c(COMM_WORLD, HEADER, 12) )
+    !
+      SELECT CASE ( trim( HEADER ) )
+      CASE( "STATUS" )
+        !
+        io_begin
+           IF (hasdata) THEN
+              CALL writebuffer( ipi_socket, "HAVEDATA    ", MSGLEN )
+           ELSE IF (isinit) THEN
+              CALL writebuffer( ipi_socket, "READY       ", MSGLEN )
+           ELSE IF (.not. isinit) THEN
+              CALL writebuffer( ipi_socket, "NEEDINIT    ", MSGLEN )
+           ELSE
+              exit_status = 129
+              GOTO 5100
+           END IF
+        io_end
+        !
+      CASE( "INIT" )
+        CALL driver_init()
+        isinit=.true.
+        !
+      CASE( "POSDATA" )
+        do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server for the first time..."
+        CALL read_and_share()
+        do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server completed!"
+
+        ! For the first step, just read the positions and exit the loop.
+        EXIT DRIVER_LOOP_1
+
+      ! CASE( "GETFORCE" )
+      !   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !   ! energy without entropy (sigma -> 0), eV to a.u.
+      !   epot = (TOTEN - EENTROPY / (2 + NORDER)) / (2*RYTOEV)
+      !   ! The forces on atoms, eV / Angstrom to a.u.
+      !   combuf = RESHAPE(TIFOR, (/3 * nat/)) / (2*RYTOEV) * AUTOA
+      !   ! The pressure virial, eV to Hartree
+      !   vir = TRANSPOSE(TSIF) / (2*RYTOEV)
+      !   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      !
+      !   CALL driver_getforce()
+      !   !
+      !   ! ... resets init to get replica index again at next step
+      !   !
+      !   isinit    = .false.
+      !   hasdata   = .false.
+      !   firststep = .false.
+      !   !
+      CASE DEFAULT
+        exit_status = 130
+        GOTO 5100
+      END SELECT
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ENDDO DRIVER_LOOP_1
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  END IF
+  !
 
 !-----------------------------------------------------------------------
 ! diverse INCAR readers
@@ -2767,47 +2879,6 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
   !***********************************************************************
   !***********************************************************************
 
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  ! Reading command line arguments for i-pi
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  IF (DYN%IBRION == 57) THEN
-    io_begin
-      hostname = '127.0.0.1'
-      port     = 27182       ! default port number
-      inet     = 1           ! default internet socket
-      ii       = 1           ! command line argument counter
-      do 
-        call get_command_argument(ii, rbuff)
-        if(len_trim(rbuff) == 0) exit
-        ii = ii + 1
-        select case (trim(rbuff))
-          case('-h')
-            call get_command_argument(ii, hostname)
-          case('-p')
-            call get_command_argument(ii, pbuff)
-            read(pbuff,*) port
-          case('-i')
-            inet=1    ! internet socket
-          case('-u')
-            inet=0    ! UNIX socket
-        end select
-      end do
-    io_end
-
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    ! Connect to the i-pi server
-    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !
-    do_io CALL open_socket ( ipi_socket, inet, port, hostname )
-    CALLMPI( M_bcast_i(COMM_WORLD, ipi_socket, 1) )
-    do_io write(*,'(X,A,A,I6)') " @ DRIVER MODE: Connecting to server: ", &
-                                trim( hostname ) // " :", port
-  END IF
-  !
-
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
   IF (IO%IU0 >= 0) WRITE (TIU0, *) 'entering main loop'
 
   NSTEP = 0
@@ -3438,16 +3509,21 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
         ! save the current positions.
         DYN%POSIOC = DYN%POSION
 
-        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        ! At this stage, we have obtained the forces and stresses. However,
-        ! the positions in the first step are read from POSCAR, which might not
-        ! be the same as the positions read from i-pi server.
-        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        IF (firststep) THEN
-          hasdata = .false.
-        ELSE
-          hasdata = .true.
-        END IF
+        ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! ! At this stage, we have obtained the forces and stresses. However,
+        ! ! the positions in the first step are read from POSCAR, which might not
+        ! ! be the same as the positions read from i-pi server.
+        ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! IF (firststep) THEN
+        !   hasdata = .false.
+        ! ELSE
+        !   hasdata = .true.
+        ! END IF
+
+        ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! At this stage, we have obtained the forces and stresses, 
+        ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        hasdata = .true.
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! DRIVER_LOOP _START_
@@ -3486,16 +3562,19 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
             CALL read_and_share()
             do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server completed!"
 
-            ! For the first step, check if the positions from POSCAR are the
-            ! same as those from sockets.
-            IF (firststep .AND. (SUM(ABS(DYN%POSION - DYN%POSIOC)) < 1.0E-6_q)) THEN
-              do_io write(*,*) " @ DRIVER MODE: Using forces from the first step!"
-              hasdata = .true.
-            ELSE
-              ! If not the same, exit the loop and do the forces calculations.
-              hasdata = .false.
-              EXIT DRIVER_LOOP
-            END IF
+            ! ! For the first step, check if the positions from POSCAR are the
+            ! ! same as those from sockets.
+            ! IF (firststep .AND. (SUM(ABS(DYN%POSION - DYN%POSIOC)) < 1.0E-6_q)) THEN
+            !   do_io write(*,*) " @ DRIVER MODE: Using forces from the first step!"
+            !   hasdata = .true.
+            ! ELSE
+            !   ! If not the same, exit the loop and do the forces calculations.
+            !   hasdata = .false.
+            !   EXIT DRIVER_LOOP
+            ! END IF
+
+            ! We have the new positions, enter the next loop.
+            EXIT DRIVER_LOOP
 
           CASE( "GETFORCE" )
             !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
