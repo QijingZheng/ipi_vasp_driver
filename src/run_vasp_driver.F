@@ -479,33 +479,6 @@ PROGRAM VAMP
   TIU0 = IO%IU0
   CALL START_XML(IUXML_SET, "vasprun.xml")
 
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  ! Reading command line arguments for i-pi
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  io_begin
-    hostname = '127.0.0.1'
-    port     = 27182       ! default port number
-    inet     = 1           ! default internet socket
-    ii       = 1           ! command line argument counter
-    do 
-      call get_command_argument(ii, rbuff)
-      if(len_trim(rbuff) == 0) exit
-      ii = ii + 1
-      select case (trim(rbuff))
-        case('-h')
-          call get_command_argument(ii, hostname)
-        case('-p')
-          call get_command_argument(ii, pbuff)
-          read(pbuff,*) port
-        case('-i')
-          inet=1    ! internet socket
-        case('-u')
-          inet=0    ! UNIX socket
-      end select
-    end do
-  io_end
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 !-----------------------------------------------------------------------
 !  open Files
 !-----------------------------------------------------------------------
@@ -2794,17 +2767,48 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
   !***********************************************************************
   !***********************************************************************
 
-  IF (IO%IU0 >= 0) WRITE (TIU0, *) 'entering main loop'
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! Reading command line arguments for i-pi
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  IF (DYN%IBRION == 57) THEN
+    io_begin
+      hostname = '127.0.0.1'
+      port     = 27182       ! default port number
+      inet     = 1           ! default internet socket
+      ii       = 1           ! command line argument counter
+      do 
+        call get_command_argument(ii, rbuff)
+        if(len_trim(rbuff) == 0) exit
+        ii = ii + 1
+        select case (trim(rbuff))
+          case('-h')
+            call get_command_argument(ii, hostname)
+          case('-p')
+            call get_command_argument(ii, pbuff)
+            read(pbuff,*) port
+          case('-i')
+            inet=1    ! internet socket
+          case('-u')
+            inet=0    ! UNIX socket
+        end select
+      end do
+    io_end
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! Connect to the i-pi server
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !
+    do_io CALL open_socket ( ipi_socket, inet, port, hostname )
+    CALLMPI( M_bcast_i(COMM_WORLD, ipi_socket, 1) )
+    do_io write(*,'(X,A,A,I6)') " @ DRIVER MODE: Connecting to server: ", &
+                                trim( hostname ) // " :", port
+  END IF
+  !
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  ! Connect to the i-pi server
-  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  !
-  do_io CALL open_socket ( ipi_socket, inet, port, hostname )
-  CALLMPI( M_bcast_i(COMM_WORLD, ipi_socket, 1) )
-  do_io write(*,'(X,A,A,I6)') " @ DRIVER MODE: Connecting to server: ", &
-                              trim( hostname ) // " :", port
-  !
+
+
+  IF (IO%IU0 >= 0) WRITE (TIU0, *) 'entering main loop'
 
   NSTEP = 0
   CALL START_TIMING("LOOP+")
@@ -3255,7 +3259,7 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
       ! i-pi driver mode: IBRION == 57
       !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       IF (DYN%IBRION == -1 .OR. DYN%IBRION == 5 .OR. DYN%IBRION == 6 .OR. &
-          DYN%IBRION == 7 .OR. DYN%IBRION == 8) THEN
+          DYN%IBRION == 7 .OR. DYN%IBRION == 8 .OR. DYN%IBRION == 57) THEN
         EENTROPY = E%EENTROPY*SCALEE
         io_begin
         WRITE (17, 7281, ADVANCE='NO') NSTEP, TOTEN, &
@@ -3426,6 +3430,103 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
       &   ' SP= ', E8.2, ' SK= ', E8.2)
 77280 FORMAT(' mag=', 3F11.3)
 
+      ELSE IF (DYN%IBRION == 57) THEN ibrion
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! i-pi driver mode: IBRION == 57, read positions from sockets.
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        ! save the current positions.
+        DYN%POSIOC = DYN%POSION
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! At this stage, we have obtained the forces and stresses. However,
+        ! the positions in the first step are read from POSCAR, which might not
+        ! be the same as the positions read from i-pi server.
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        IF (firststep) THEN
+          hasdata = .false.
+        ELSE
+          hasdata = .true.
+        END IF
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! DRIVER_LOOP _START_
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        DRIVER_LOOP: DO
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !
+        do_io CALL readbuffer(ipi_socket, HEADER, MSGLEN)
+        do_io write(*,*) " @ DRIVER MODE: Message from server: ", trim( HEADER )
+        CALLMPI( M_bcast_c(COMM_WORLD, HEADER, 12) )
+        !
+          SELECT CASE ( trim( HEADER ) )
+          CASE( "STATUS" )
+            !
+            io_begin
+               IF (hasdata) THEN
+                  CALL writebuffer( ipi_socket, "HAVEDATA    ", MSGLEN )
+               ELSE IF (isinit) THEN
+                  CALL writebuffer( ipi_socket, "READY       ", MSGLEN )
+               ELSE IF (.not. isinit) THEN
+                  CALL writebuffer( ipi_socket, "NEEDINIT    ", MSGLEN )
+               ELSE
+                  exit_status = 129
+                  GOTO 5100
+               END IF
+            io_end
+            !
+          CASE( "INIT" )
+            CALL driver_init()
+            isinit=.true.
+            !
+          CASE( "POSDATA" )
+            do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server..."
+            CALL read_and_share()
+            do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server completed!"
+
+            ! For the first step, check if the positions from POSCAR are the
+            ! same as those from sockets.
+            IF (firststep .AND. (SUM(ABS(DYN%POSION - DYN%POSIOC)) < 1.0E-6_q)) THEN
+              do_io write(*,*) " @ DRIVER MODE: Using forces from the first step!"
+              hasdata = .true.
+            ELSE
+              ! If not the same, exit the loop and do the forces calculations.
+              hasdata = .false.
+              EXIT DRIVER_LOOP
+            END IF
+
+          CASE( "GETFORCE" )
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            ! energy without entropy (sigma -> 0), eV to a.u.
+            epot = (TOTEN - EENTROPY / (2 + NORDER)) / (2*RYTOEV)
+            ! The forces on atoms, eV / Angstrom to a.u.
+            combuf = RESHAPE(TIFOR, (/3 * nat/)) / (2*RYTOEV) * AUTOA
+            ! The pressure virial, eV to Hartree
+            vir = TRANSPOSE(TSIF) / (2*RYTOEV)
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+            CALL driver_getforce()
+            !
+            ! ... resets init to get replica index again at next step
+            !
+            isinit    = .false.
+            hasdata   = .false.
+            firststep = .false.
+            !
+          CASE DEFAULT
+            exit_status = 130
+            GOTO 5100
+          END SELECT
+
+        ENDDO DRIVER_LOOP
+        !
+        !***********************************************************************
+        ! DRIVER_LOOP _END_
+        !***********************************************************************
+        !
+
 !=======================================================================
 ! DYN%IBRION =
 ! 1  quasi-Newton algorithm
@@ -3516,18 +3617,18 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
 
       ELSE IF (DYN%IBRION == 7 .OR. DYN%IBRION == 8) THEN ibrion
 
-      IF (.NOT. LJ_ONLY) THEN
-        CALL LR_SKELETON( &
-          KINEDEN, HAMILTONIAN, P, WDES, NONLR_S, NONL_S, W, LATT_CUR, LATT_INI, &
-          T_INFO, DYN, INFO, IO, MIX, KPOINTS, SYMM, GRID, GRID_SOFT, &
-          GRIDC, GRIDB, GRIDUS, C_TO_US, B_TO_C, SOFT_TO_C, E, &
-          CHTOT, CHTOTL, DENCOR, CVTOT, CSTRF, &
-          CDIJ, CQIJ, CRHODE, N_MIX_PAW, RHOLM, RHOLM_LAST, &
-          CHDEN, SV, DOS, DOSI, CHAM, &
-          DYN%IBRION, LMDIM, IRDMAX, NEDOS, &
-          TOTEN, EFERMI, TIFOR)
+        IF (.NOT. LJ_ONLY) THEN
+          CALL LR_SKELETON( &
+            KINEDEN, HAMILTONIAN, P, WDES, NONLR_S, NONL_S, W, LATT_CUR, LATT_INI, &
+            T_INFO, DYN, INFO, IO, MIX, KPOINTS, SYMM, GRID, GRID_SOFT, &
+            GRIDC, GRIDB, GRIDUS, C_TO_US, B_TO_C, SOFT_TO_C, E, &
+            CHTOT, CHTOTL, DENCOR, CVTOT, CSTRF, &
+            CDIJ, CQIJ, CRHODE, N_MIX_PAW, RHOLM, RHOLM_LAST, &
+            CHDEN, SV, DOS, DOSI, CHAM, &
+            DYN%IBRION, LMDIM, IRDMAX, NEDOS, &
+            TOTEN, EFERMI, TIFOR)
 
-      END IF ! LJ_ONLY
+        END IF ! LJ_ONLY
 !=======================================================================
 ! meaning of DYN%ISIF :
 !  DYN%ISIF  calculate                           relax
@@ -3546,324 +3647,228 @@ WRITE (19, '(A)') 'SECTION = "--------------------------------------------------
 !
 !=======================================================================
       ELSE IF (DYN%IBRION > 0) THEN ibrion
-      IF (.NOT. LJ_ONLY) THEN
-        ! sum energy of images along chain
-        EENTROPY = E%EENTROPY*SCALEE
+        IF (.NOT. LJ_ONLY) THEN
+          ! sum energy of images along chain
+          EENTROPY = E%EENTROPY*SCALEE
 
-        IF (IMAGES == 0) THEN
-          CALLMPI_C(sum_chain(TOTEN))
-          CALLMPI_C(sum_chain(EENTROPY))
-        ENDIF
-
-        io_begin
-        WRITE (17, 7281, ADVANCE='NO') NSTEP, TOTEN, &
-          TOTEN - EENTROPY/(2 + NORDER), TOTEN - TOTENG
-        IF (IO%IU0 >= 0) &
-          WRITE (TIU0, 7281, ADVANCE='NO') NSTEP, TOTEN, &
-          TOTEN - EENTROPY/(2 + NORDER), TOTEN - TOTENG
-
-        IF (WDES%NCDIJ >= 2) THEN
-          WRITE (17, 77281) RHOTOT(2:WDES%NCDIJ)
-          IF (IO%IU0 >= 0) WRITE (TIU0, 77281) RHOTOT(2:WDES%NCDIJ)
-        ELSE
-          WRITE (17, *)
-          IF (IO%IU0 >= 0) WRITE (TIU0, *)
-        ENDIF
-
-        io_end
-7281    FORMAT(I4, ' F= ', E14.8, ' E0= ', E14.8, 1X, ' d E =', E12.6)
-77281   FORMAT('  mag=', 3F11.4)
-        !-----------------------------------------------------------------------
-        !  set DYN%D2C to forces in cartesian coordinates multiplied by FACT
-        !  FACT is determined from timestep in a way, that a stable timestep
-        !   gives a good trial step
-        !-----------------------------------------------------------------------
-        FACT = 0
-        IF (DYN%ISIF < 5) FACT = 10*DYN%POTIM*EVTOJ/AMTOKG*1E-10_q
-        LSTOP2 = .TRUE.
-
-        NI = 1
-        DO NT = 1, T_INFO%NTYP
-          DO NI = NI, T_INFO%NITYP(NT) + NI - 1
-            DYN%D2C(1, NI) = TIFOR(1, NI)*FACT
-            DYN%D2C(2, NI) = TIFOR(2, NI)*FACT
-            DYN%D2C(3, NI) = TIFOR(3, NI)*FACT
-            IF (SQRT(TIFOR(1, NI)**2 + TIFOR(2, NI)**2 + TIFOR(3, NI)**2) &
-                 &       > ABS(DYN%EDIFFG)) LSTOP2 = .FALSE.
-          ENDDO
-        ENDDO
-        ! for all DYN%ISIF greater or equal 3 cell shape optimisations will be done
-        FACTSI = 0
-        IF (DYN%ISIF >= 3) FACTSI = 10*DYN%POTIM*EVTOJ/AMTOKG/T_INFO%NIONS*1E-10_q
-
-        DO I = 1, 3
-          DO K = 1, 3
-            D2SIF(I, K) = TSIF(I, K)*FACTSI
-          ENDDO
-          D2SIF(I, I) = D2SIF(I, I) - DYN%PSTRESS/(EVTOJ*1E22_q)*LATT_CUR%OMEGA*FACTSI
-        ENDDO
-        ! For DYN%ISIF =4 or =5 we take only pure shear stresses: subtract pressure
-        IF ((DYN%ISIF == 4) .OR. (DYN%ISIF == 5)) THEN
-          DO I = 1, 3
-            D2SIF(I, I) = D2SIF(I, I) - PRESS*FACTSI
-          ENDDO
-        ENDIF
-! For DYN%ISIF =7 take only pressure (volume relaxation)
-        IF (DYN%ISIF == 7) THEN
-          DO I = 1, 3
-            DO J = 1, 3
-              D2SIF(J, I) = 0
-            ENDDO
-            D2SIF(I, I) = PRESS*FACTSI
-          ENDDO
-        ENDIF
-
-        CALL CONSTR_CELL_RELAX(D2SIF)
-
-        IF (FACTSI /= 0) THEN
-          DO I = 1, 3
-            DO J = 1, 3
-              IF (FACTSI /= 0) THEN
-                IF (ABS(D2SIF(J, I))/FACTSI/T_INFO%NIONS > ABS(DYN%EDIFFG)) LSTOP2 = .FALSE.
-              ENDIF
-            ENDDO
-          ENDDO
-        ENDIF
-        !-----------------------------------------------------------------------
-        !  do relaxations using diverse algorithms
-        !-----------------------------------------------------------------------
-        ! change of the energy between two ionic step used as stopping criterion
-        INFO%LSTOP = (ABS(TOTEN - TOTENG) < DYN%EDIFFG)
-
-        CALLMPI_C(and_chain(LSTOP2))
-        CALLMPI_C(and_chain(INFO%LSTOP))
-
-        ! IFLAG=0 means no reinit of wavefunction prediction
-        IFLAG = 0
-        IF (DYN%IBRION == 1) THEN
-          CALL BRIONS(T_INFO%NIONS, DYN%POSION, DYN%POSIOC, DYN%D2C, LATT_CUR%A, LATT_CUR%B, D2SIF, &
-                      MAX(DYN%NSW + 1, DYN%NFREE + 1), DYN%NFREE, IO%IU6, IO%IU0, FACT, FACTSI, E1TEST)
-! Sometimes there is the danger that the optimisation scheme (especially
-! the Broyden scheme) fools itself by performing a 'too small' step - to
-! avoid this use a second break condition ('trial step energy change'):
-          INFO%LSTOP = INFO%LSTOP .AND. (ABS(E1TEST) < DYN%EDIFFG)
-! if we have very small forces (small trial energy change) we can stop
-          INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
-          TOTENG = TOTEN
-!-----------------------------------------------------------------------
-        ELSE IF (DYN%IBRION == 3 .AND. DYN%SMASS <= 0) THEN
-          CALL ION_VEL_QUENCH(T_INFO%NIONS, LATT_CUR%A, LATT_CUR%B, IO%IU6, IO%IU0, &
-                              T_INFO%LSDYN, &
-                              DYN%POSION, DYN%POSIOC, FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, E1TEST)
-          IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
-          TOTENG = TOTEN
-!-----------------------------------------------------------------------
-        ELSE IF (DYN%IBRION == 3) THEN
-          CALL IONDAMPED(T_INFO%NIONS, LATT_CUR%A, LATT_CUR%B, IO%IU6, IO%IU0, &
-                         T_INFO%LSDYN, &
-                         DYN%POSION, DYN%POSIOC, FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, E1TEST, DYN%SMASS)
-          IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
-          TOTENG = TOTEN
-!-----------------------------------------------------------------------
-        ELSE IF (DYN%IBRION == 2) THEN
-          IFLAG = 1
-          IF (NSTEP == 1) IFLAG = 0
-!  set accuracy of energy (determines whether cubic interpolation is used)
-          EACC = MAX(ABS(INFO%EDIFF), ABS(ECONV))
-
-          CALLMPI_C(sum_chain(EACC))
-          IF (LHYPER_NUDGE()) EACC = 1E10    ! energy not very accurate, use only force
-
-          CALL IONCGR(IFLAG, T_INFO%NIONS, TOTEN, LATT_CUR%A, LATT_CUR%B, DYN%NFREE, DYN%POSION, DYN%POSIOC, &
-                      FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, DYN%D3, DISMAX, IO%IU6, IO%IU0, &
-                      EACC, DYN%EDIFFG, E1TEST, LSTOP2)
-!    if IFLAG=1 new trial step -> reinit of waveprediction
-          INFO%LSTOP = .FALSE.
-          IF (IFLAG == 1) THEN
-            INFO%LSTOP = (ABS(TOTEN - TOTENG) < DYN%EDIFFG)
-            TOTENG = TOTEN
+          IF (IMAGES == 0) THEN
+            CALLMPI_C(sum_chain(TOTEN))
+            CALLMPI_C(sum_chain(EENTROPY))
           ENDIF
-          IF (IFLAG == 2) INFO%LSTOP = .TRUE.
-! if we have very small forces (small trial energy change) we can stop
-          IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
-!tb start
-          ! dimer method
-        ELSE IF (DYN%IBRION == 44) THEN
-          CALL dimer(DYN, T_INFO, INFO, LATT_CUR, IO, TOTEN, FACT, LSTOP2)
-          CALLMPI_C(and_chain(LSTOP2))
-          CALLMPI_C(and_chain(INFO%LSTOP))
-          TOTENG = TOTEN
 
-          ! damped velocity Verler to calculate IRC (not optimization!!!)
-        ELSE IF (DYN%IBRION == 40) THEN
-          FACT = (DYN%POTIM**2)*EVTOJ/AMTOKG*1E-10_q
-          NI = 1
-          DO NT = 1, T_INFO%NTYP
-            DO NI = NI, T_INFO%NITYP(NT) + NI - 1
-              DYN%D2C(1, NI) = TIFOR(1, NI)*FACT/2/T_INFO%POMASS(NT)
-              DYN%D2C(2, NI) = TIFOR(2, NI)*FACT/2/T_INFO%POMASS(NT)
-              DYN%D2C(3, NI) = TIFOR(3, NI)*FACT/2/T_INFO%POMASS(NT)
-            ENDDO
-          ENDDO
-          CALL KARDIR(T_INFO%NIONS, DYN%D2C, LATT_CUR%B)
+          io_begin
+          WRITE (17, 7281, ADVANCE='NO') NSTEP, TOTEN, &
+            TOTEN - EENTROPY/(2 + NORDER), TOTEN - TOTENG
+          IF (IO%IU0 >= 0) &
+            WRITE (TIU0, 7281, ADVANCE='NO') NSTEP, TOTEN, &
+            TOTEN - EENTROPY/(2 + NORDER), TOTEN - TOTENG
 
-          CALL dvv(DYN, T_INFO, INFO, LATT_CUR, IO, TOTEN, FACT)
-          FACT = 10*DYN%POTIM*EVTOJ/AMTOKG*1E-10_q
+          IF (WDES%NCDIJ >= 2) THEN
+            WRITE (17, 77281) RHOTOT(2:WDES%NCDIJ)
+            IF (IO%IU0 >= 0) WRITE (TIU0, 77281) RHOTOT(2:WDES%NCDIJ)
+          ELSE
+            WRITE (17, *)
+            IF (IO%IU0 >= 0) WRITE (TIU0, *)
+          ENDIF
+
+          io_end
+  7281    FORMAT(I4, ' F= ', E14.8, ' E0= ', E14.8, 1X, ' d E =', E12.6)
+  77281   FORMAT('  mag=', 3F11.4)
+          !-----------------------------------------------------------------------
+          !  set DYN%D2C to forces in cartesian coordinates multiplied by FACT
+          !  FACT is determined from timestep in a way, that a stable timestep
+          !   gives a good trial step
+          !-----------------------------------------------------------------------
+          FACT = 0
+          IF (DYN%ISIF < 5) FACT = 10*DYN%POTIM*EVTOJ/AMTOKG*1E-10_q
+          LSTOP2 = .TRUE.
+
           NI = 1
           DO NT = 1, T_INFO%NTYP
             DO NI = NI, T_INFO%NITYP(NT) + NI - 1
               DYN%D2C(1, NI) = TIFOR(1, NI)*FACT
               DYN%D2C(2, NI) = TIFOR(2, NI)*FACT
               DYN%D2C(3, NI) = TIFOR(3, NI)*FACT
+              IF (SQRT(TIFOR(1, NI)**2 + TIFOR(2, NI)**2 + TIFOR(3, NI)**2) &
+                   &       > ABS(DYN%EDIFFG)) LSTOP2 = .FALSE.
             ENDDO
           ENDDO
-          TOTENG = TOTEN
-          !tb end
-        ELSE IF (DYN%IBRION == 11) THEN
-          !-----------------------------------------------------------------------
-          ! interactive mode, read positions from standard input.
-          !-----------------------------------------------------------------------
-          CALL INPOS(LATT_CUR, T_INFO, DYN, IO%IU6, IO%IU0, INFO%LSTOP, WDES%COMM)
-        ELSE IF (DYN%IBRION == 57) THEN
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          ! i-pi driver mode: IBRION == 57, read positions from sockets.
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          ! for all DYN%ISIF greater or equal 3 cell shape optimisations will be done
+          FACTSI = 0
+          IF (DYN%ISIF >= 3) FACTSI = 10*DYN%POTIM*EVTOJ/AMTOKG/T_INFO%NIONS*1E-10_q
 
-          ! save the current positions.
-          DYN%POSIOC = DYN%POSION
+          DO I = 1, 3
+            DO K = 1, 3
+              D2SIF(I, K) = TSIF(I, K)*FACTSI
+            ENDDO
+            D2SIF(I, I) = D2SIF(I, I) - DYN%PSTRESS/(EVTOJ*1E22_q)*LATT_CUR%OMEGA*FACTSI
+          ENDDO
+          ! For DYN%ISIF =4 or =5 we take only pure shear stresses: subtract pressure
+          IF ((DYN%ISIF == 4) .OR. (DYN%ISIF == 5)) THEN
+            DO I = 1, 3
+              D2SIF(I, I) = D2SIF(I, I) - PRESS*FACTSI
+            ENDDO
+          ENDIF
+  ! For DYN%ISIF =7 take only pressure (volume relaxation)
+          IF (DYN%ISIF == 7) THEN
+            DO I = 1, 3
+              DO J = 1, 3
+                D2SIF(J, I) = 0
+              ENDDO
+              D2SIF(I, I) = PRESS*FACTSI
+            ENDDO
+          ENDIF
 
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          ! At this stage, we have obtained the forces and stresses. However,
-          ! the positions in the first step are read from POSCAR, which might not
-          ! be the same as the positions read from i-pi server.
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          IF (firststep) THEN
-            hasdata = .false.
-          ELSE
-            hasdata = .true.
+          CALL CONSTR_CELL_RELAX(D2SIF)
+
+          IF (FACTSI /= 0) THEN
+            DO I = 1, 3
+              DO J = 1, 3
+                IF (FACTSI /= 0) THEN
+                  IF (ABS(D2SIF(J, I))/FACTSI/T_INFO%NIONS > ABS(DYN%EDIFFG)) LSTOP2 = .FALSE.
+                ENDIF
+              ENDDO
+            ENDDO
+          ENDIF
+          !-----------------------------------------------------------------------
+          !  do relaxations using diverse algorithms
+          !-----------------------------------------------------------------------
+          ! change of the energy between two ionic step used as stopping criterion
+          INFO%LSTOP = (ABS(TOTEN - TOTENG) < DYN%EDIFFG)
+
+          CALLMPI_C(and_chain(LSTOP2))
+          CALLMPI_C(and_chain(INFO%LSTOP))
+
+          ! IFLAG=0 means no reinit of wavefunction prediction
+          IFLAG = 0
+          IF (DYN%IBRION == 1) THEN
+            CALL BRIONS(T_INFO%NIONS, DYN%POSION, DYN%POSIOC, DYN%D2C, LATT_CUR%A, LATT_CUR%B, D2SIF, &
+                        MAX(DYN%NSW + 1, DYN%NFREE + 1), DYN%NFREE, IO%IU6, IO%IU0, FACT, FACTSI, E1TEST)
+  ! Sometimes there is the danger that the optimisation scheme (especially
+  ! the Broyden scheme) fools itself by performing a 'too small' step - to
+  ! avoid this use a second break condition ('trial step energy change'):
+            INFO%LSTOP = INFO%LSTOP .AND. (ABS(E1TEST) < DYN%EDIFFG)
+  ! if we have very small forces (small trial energy change) we can stop
+            INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
+            TOTENG = TOTEN
+  !-----------------------------------------------------------------------
+          ELSE IF (DYN%IBRION == 3 .AND. DYN%SMASS <= 0) THEN
+            CALL ION_VEL_QUENCH(T_INFO%NIONS, LATT_CUR%A, LATT_CUR%B, IO%IU6, IO%IU0, &
+                                T_INFO%LSDYN, &
+                                DYN%POSION, DYN%POSIOC, FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, E1TEST)
+            IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
+            TOTENG = TOTEN
+  !-----------------------------------------------------------------------
+          ELSE IF (DYN%IBRION == 3) THEN
+            CALL IONDAMPED(T_INFO%NIONS, LATT_CUR%A, LATT_CUR%B, IO%IU6, IO%IU0, &
+                           T_INFO%LSDYN, &
+                           DYN%POSION, DYN%POSIOC, FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, E1TEST, DYN%SMASS)
+            IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
+            TOTENG = TOTEN
+  !-----------------------------------------------------------------------
+          ELSE IF (DYN%IBRION == 2) THEN
+            IFLAG = 1
+            IF (NSTEP == 1) IFLAG = 0
+  !  set accuracy of energy (determines whether cubic interpolation is used)
+            EACC = MAX(ABS(INFO%EDIFF), ABS(ECONV))
+
+            CALLMPI_C(sum_chain(EACC))
+            IF (LHYPER_NUDGE()) EACC = 1E10    ! energy not very accurate, use only force
+
+            CALL IONCGR(IFLAG, T_INFO%NIONS, TOTEN, LATT_CUR%A, LATT_CUR%B, DYN%NFREE, DYN%POSION, DYN%POSIOC, &
+                        FACT, DYN%D2C, FACTSI, D2SIF, DYN%D2, DYN%D3, DISMAX, IO%IU6, IO%IU0, &
+                        EACC, DYN%EDIFFG, E1TEST, LSTOP2)
+  !    if IFLAG=1 new trial step -> reinit of waveprediction
+            INFO%LSTOP = .FALSE.
+            IF (IFLAG == 1) THEN
+              INFO%LSTOP = (ABS(TOTEN - TOTENG) < DYN%EDIFFG)
+              TOTENG = TOTEN
+            ENDIF
+            IF (IFLAG == 2) INFO%LSTOP = .TRUE.
+  ! if we have very small forces (small trial energy change) we can stop
+            IF (IFLAG == 1) INFO%LSTOP = INFO%LSTOP .OR. (ABS(E1TEST) < 0.1_q*DYN%EDIFFG)
+  !tb start
+            ! dimer method
+          ELSE IF (DYN%IBRION == 44) THEN
+            CALL dimer(DYN, T_INFO, INFO, LATT_CUR, IO, TOTEN, FACT, LSTOP2)
+            CALLMPI_C(and_chain(LSTOP2))
+            CALLMPI_C(and_chain(INFO%LSTOP))
+            TOTENG = TOTEN
+
+            ! damped velocity Verler to calculate IRC (not optimization!!!)
+          ELSE IF (DYN%IBRION == 40) THEN
+            FACT = (DYN%POTIM**2)*EVTOJ/AMTOKG*1E-10_q
+            NI = 1
+            DO NT = 1, T_INFO%NTYP
+              DO NI = NI, T_INFO%NITYP(NT) + NI - 1
+                DYN%D2C(1, NI) = TIFOR(1, NI)*FACT/2/T_INFO%POMASS(NT)
+                DYN%D2C(2, NI) = TIFOR(2, NI)*FACT/2/T_INFO%POMASS(NT)
+                DYN%D2C(3, NI) = TIFOR(3, NI)*FACT/2/T_INFO%POMASS(NT)
+              ENDDO
+            ENDDO
+            CALL KARDIR(T_INFO%NIONS, DYN%D2C, LATT_CUR%B)
+
+            CALL dvv(DYN, T_INFO, INFO, LATT_CUR, IO, TOTEN, FACT)
+            FACT = 10*DYN%POTIM*EVTOJ/AMTOKG*1E-10_q
+            NI = 1
+            DO NT = 1, T_INFO%NTYP
+              DO NI = NI, T_INFO%NITYP(NT) + NI - 1
+                DYN%D2C(1, NI) = TIFOR(1, NI)*FACT
+                DYN%D2C(2, NI) = TIFOR(2, NI)*FACT
+                DYN%D2C(3, NI) = TIFOR(3, NI)*FACT
+              ENDDO
+            ENDDO
+            TOTENG = TOTEN
+            !tb end
+          ELSE IF (DYN%IBRION == 11) THEN
+            !-----------------------------------------------------------------------
+            ! interactive mode, read positions from standard input.
+            !-----------------------------------------------------------------------
+            CALL INPOS(LATT_CUR, T_INFO, DYN, IO%IU6, IO%IU0, INFO%LSTOP, WDES%COMM)
           END IF
 
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          ! DRIVER_LOOP _START_
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          DRIVER_LOOP: DO
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-          !
-          do_io CALL readbuffer(ipi_socket, HEADER, MSGLEN)
-          do_io write(*,*) " @ DRIVER MODE: Message from server: ", trim( HEADER )
-          CALLMPI( M_bcast_c(COMM_WORLD, HEADER, 12) )
-          !
-            SELECT CASE ( trim( HEADER ) )
-            CASE( "STATUS" )
-              !
-              io_begin
-                 IF (hasdata) THEN
-                    CALL writebuffer( ipi_socket, "HAVEDATA    ", MSGLEN )
-                 ELSE IF (isinit) THEN
-                    CALL writebuffer( ipi_socket, "READY       ", MSGLEN )
-                 ELSE IF (.not. isinit) THEN
-                    CALL writebuffer( ipi_socket, "NEEDINIT    ", MSGLEN )
-                 ELSE
-                    exit_status = 129
-                    GOTO 5100
-                 END IF
-              io_end
-              !
-            CASE( "INIT" )
-              CALL driver_init()
-              isinit=.true.
-              !
-            CASE( "POSDATA" )
-              do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server..."
-              CALL read_and_share()
-              do_io write(*,*) " @ DRIVER MODE: Reading POSDATA from server completed!"
-
-              ! For the first step, check if the positions from POSCAR are the
-              ! same as those from sockets.
-              IF (firststep .AND. (SUM(ABS(DYN%POSION - DYN%POSIOC)) < 1.0E-6_q)) THEN
-                do_io write(*,*) " @ DRIVER MODE: Using forces from the first step!"
-                hasdata = .true.
-              ELSE
-                ! If not the same, exit the loop and do the forces calculations.
-                hasdata = .false.
-                EXIT DRIVER_LOOP
-              END IF
-
-            CASE( "GETFORCE" )
-              !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-              ! energy without entropy (sigma -> 0), eV to a.u.
-              epot = (TOTEN - EENTROPY / (2 + NORDER)) / (2*RYTOEV)
-              ! The forces on atoms, eV / Angstrom to a.u.
-              combuf = RESHAPE(TIFOR, (/3 * nat/)) / (2*RYTOEV) * AUTOA
-              ! The pressure virial, eV to Hartree
-              vir = TRANSPOSE(TSIF) / (2*RYTOEV)
-              !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-              CALL driver_getforce()
-              !
-              ! ... resets init to get replica index again at next step
-              !
-              isinit    = .false.
-              hasdata   = .false.
-              firststep = .false.
-              !
-            CASE DEFAULT
-              exit_status = 130
-              GOTO 5100
-            END SELECT
-
-          ENDDO DRIVER_LOOP
-          !
-          !***********************************************************************
-          ! DRIVER_LOOP _END_
-          !***********************************************************************
-          !
-        ENDIF
-
-! restrict volume for constant volume relaxation
-        IF (DYN%ISIF == 4 .OR. DYN%ISIF == 5) THEN
-          OMEGA_OLD = LATT_CUR%OMEGA
+          ! restrict volume for constant volume relaxation
+          IF (DYN%ISIF == 4 .OR. DYN%ISIF == 5) THEN
+            OMEGA_OLD = LATT_CUR%OMEGA
+            CALL LATTIC(LATT_CUR)
+            SCALEQ = (ABS(OMEGA_OLD)/ABS(LATT_CUR%OMEGA))**(1._q/3._q)
+            DO I = 1, 3
+              LATT_CUR%A(1, I) = SCALEQ*LATT_CUR%A(1, I)
+              LATT_CUR%A(2, I) = SCALEQ*LATT_CUR%A(2, I)
+              LATT_CUR%A(3, I) = SCALEQ*LATT_CUR%A(3, I)
+            ENDDO
+          ENDIF
           CALL LATTIC(LATT_CUR)
-          SCALEQ = (ABS(OMEGA_OLD)/ABS(LATT_CUR%OMEGA))**(1._q/3._q)
-          DO I = 1, 3
-            LATT_CUR%A(1, I) = SCALEQ*LATT_CUR%A(1, I)
-            LATT_CUR%A(2, I) = SCALEQ*LATT_CUR%A(2, I)
-            LATT_CUR%A(3, I) = SCALEQ*LATT_CUR%A(3, I)
-          ENDDO
-        ENDIF
-        CALL LATTIC(LATT_CUR)
-!-----------------------------------------------------------------------
-!  reinitialize the prediction algorithm for the wavefunction if needed
-!-----------------------------------------------------------------------
-        PRED%INIPRE = 3
-        IF (PRED%IWAVPR >= 12 .AND. &
-             &     (ABS(TOTEN - TOTENG)/T_INFO%NIONS > 1.0_q .OR. IFLAG == 1)) THEN
-          CALL WAVPRE_NOIO(GRIDC, P, PRED, T_INFO, W, WDES, LATT_CUR, IO%LOPEN, &
-                           CHTOT, RHOLM, N_MIX_PAW, CSTRF, KINEDEN, LMDIM, CQIJ, INFO%LOVERL, IO%IU0)
+  !-----------------------------------------------------------------------
+  !  reinitialize the prediction algorithm for the wavefunction if needed
+  !-----------------------------------------------------------------------
+          PRED%INIPRE = 3
+          IF (PRED%IWAVPR >= 12 .AND. &
+               &     (ABS(TOTEN - TOTENG)/T_INFO%NIONS > 1.0_q .OR. IFLAG == 1)) THEN
+            CALL WAVPRE_NOIO(GRIDC, P, PRED, T_INFO, W, WDES, LATT_CUR, IO%LOPEN, &
+                             CHTOT, RHOLM, N_MIX_PAW, CSTRF, KINEDEN, LMDIM, CQIJ, INFO%LOVERL, IO%IU0)
 
-        ELSE IF (PRED%IWAVPR >= 2 .AND. PRED%IWAVPR < 10 .AND. &
-             &     (ABS(TOTEN - TOTENG)/T_INFO%NIONS > 1.0_q .OR. IFLAG == 1)) THEN
-          CALL WAVPRE(GRIDC, P, PRED, T_INFO, W, WDES, LATT_CUR, IO%LOPEN, &
-                      CHTOT, RHOLM, N_MIX_PAW, CSTRF, LMDIM, CQIJ, INFO%LOVERL, IO%IU0)
-        ENDIF
+          ELSE IF (PRED%IWAVPR >= 2 .AND. PRED%IWAVPR < 10 .AND. &
+               &     (ABS(TOTEN - TOTENG)/T_INFO%NIONS > 1.0_q .OR. IFLAG == 1)) THEN
+            CALL WAVPRE(GRIDC, P, PRED, T_INFO, W, WDES, LATT_CUR, IO%LOPEN, &
+                        CHTOT, RHOLM, N_MIX_PAW, CSTRF, LMDIM, CQIJ, INFO%LOVERL, IO%IU0)
+          ENDIF
 
-        ! use forces as stopping criterion if EDIFFG<0
-        IF (DYN%EDIFFG < 0) INFO%LSTOP = LSTOP2
-        io_begin
-        WRITE (TIU6, 130)
+          ! use forces as stopping criterion if EDIFFG<0
+          IF (DYN%EDIFFG < 0) INFO%LSTOP = LSTOP2
+          io_begin
+          WRITE (TIU6, 130)
 
-        IF (INFO%LSTOP) THEN
-          IF (IO%IU0 >= 0) &
-            WRITE (TIU0, *) 'reached required accuracy - stopping ', &
-            'structural energy minimisation'
-          WRITE (TIU6, *) ' '
-          WRITE (TIU6, *) 'reached required accuracy - stopping ', &
-            'structural energy minimisation'
-        ENDIF
-        io_end
-      END IF !LJ_ONLY
+          IF (INFO%LSTOP) THEN
+            IF (IO%IU0 >= 0) &
+              WRITE (TIU0, *) 'reached required accuracy - stopping ', &
+              'structural energy minimisation'
+            WRITE (TIU6, *) ' '
+            WRITE (TIU6, *) 'reached required accuracy - stopping ', &
+              'structural energy minimisation'
+          ENDIF
+          io_end
+        END IF !LJ_ONLY
       ELSE IF (DYN%IBRION == -1 .AND. (LEPSILON .OR. KINTER /= 0 .OR. LMAGBLOCH)) THEN ibrion
       IF (.NOT. LJ_ONLY) THEN
         CALL LR_SKELETON( &
